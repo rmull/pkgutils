@@ -28,7 +28,7 @@ E_PKGFILE=2    # invalid Pkgfile
 E_DIR_PERM=3   # (source/build) directory missing or missing read/write permission
 E_DOWNLOAD=4   # error during download
 E_UNPACK=5     # error during unpacking of source file(s)
-E_MD5=6        # md5sum verification failed
+E_HASH=6       # sha256sum/md5sum verification failed
 E_FOOTPRINT=7  # footprint check failure
 E_BUILD=8      # error while running 'build()'
 E_INSTALL=9    # error while installing the package via 'pkgadd'
@@ -206,7 +206,7 @@ unpack_source() {
 	done
 }
 
-make_md5sum() {
+make_hash() {
 	local FILE LOCAL_FILENAMES
 	
 	if [ "$source" ]; then
@@ -214,7 +214,7 @@ make_md5sum() {
 			LOCAL_FILENAMES="$LOCAL_FILENAMES `get_filename $FILE`"
 		done
 		
-		md5sum $LOCAL_FILENAMES | sed -e 's|  .*/|  |' | sort -k 2
+		$PKGMK_HASH_TYPE $LOCAL_FILENAMES | sed -e 's|  .*/|  |' | sort -k 2
 	fi
 }
 
@@ -224,54 +224,62 @@ make_footprint() {
 		sort -k 3
 }
 
-check_md5sum() {
+check_hash() {
 	local FILE="$PKGMK_WORK_DIR/.tmp"
-
-	cd $PKGMK_ROOT
 	
-	if [ -f $PKGMK_MD5SUM ]; then
-		make_md5sum > $FILE.md5sum
-		sort -k 2 $PKGMK_MD5SUM > $FILE.md5sum.orig
-		diff -w -t -U 0 $FILE.md5sum.orig $FILE.md5sum | \
+	cd $PKGMK_ROOT
+
+	if [ -f "$PKGMK_MD5SUM" ]; then
+		PKGMK_HASH="$PKGMK_MD5SUM"
+		PKGMK_HASH_TYPE="md5sum"
+	else
+		PKGMK_HASH="$PKGMK_SHA256SUM"
+		PKGMK_HASH_TYPE="sha256sum"
+	fi
+
+	if [ -f $PKGMK_HASH ]; then
+		make_hash > $FILE.$PKGMK_HASH_TYPE
+		sort -k 2 $PKGMK_HASH > $FILE.$PKGMK_HASH_TYPE.orig
+		diff -w -t -U 0 $FILE.$PKGMK_HASH_TYPE.orig $FILE.$PKGMK_HASH_TYPE | \
 			sed '/^@@/d' | \
 			sed '/^+++/d' | \
 			sed '/^---/d' | \
 			sed 's/^+/NEW       /g' | \
-			sed 's/^-/MISSING   /g' > $FILE.md5sum.diff
-		if [ -s $FILE.md5sum.diff ]; then
-			error "Md5sum mismatch found:"
-			cat $FILE.md5sum.diff >&2
+			sed 's/^-/MISSING   /g' > $FILE.$PKGMK_HASH_TYPE.diff
+		if [ -s $FILE.$PKGMK_HASH_TYPE.diff ]; then
+			error "$PKGMK_HASH_TYPE mismatch found:"
+			cat $FILE.$PKGMK_HASH_TYPE.diff >&2
 
 			if [ "$PKGMK_KEEP_WORK" = "no" ]; then
 				rm -rf $PKGMK_WORK_DIR
 			fi
 
-			if [ "$PKGMK_CHECK_MD5SUM" = "yes" ]; then
-				error "Md5sum not ok."
-				exit $E_MD5
+			if [ "$PKGMK_CHECK_HASH" = "yes" ]; then
+				error "$PKGMK_HASH_TYPE not ok."
+				exit $E_HASH
 			fi
 
 			error "Building '$TARGET' failed."
-			exit $E_MD5
+			exit $E_HASH
 		fi
 	else
-		if [ "$PKGMK_CHECK_MD5SUM" = "yes" ]; then
+		if [ "$PKGMK_CHECK_HASH" = "yes" ]; then
 			if [ "$PKGMK_KEEP_WORK" = "no" ]; then
 				rm -rf $PKGMK_WORK_DIR
 			fi
-			info "Md5sum not found."
-			exit $E_MD5
+			info "$PKGMK_HASH_TYPE not found."
+			exit $E_HASH
 		fi
 		
-		warning "Md5sum not found, creating new."
-		make_md5sum > $PKGMK_MD5SUM
+		warning "$PKGMK_HASH_TYPE not found, creating new."
+		make_hash > $PKGMK_HASH
 	fi
 
-	if [ "$PKGMK_CHECK_MD5SUM" = "yes" ]; then
+	if [ "$PKGMK_CHECK_HASH" = "yes" ]; then
 		if [ "$PKGMK_KEEP_WORK" = "no" ]; then
 			rm -rf $PKGMK_WORK_DIR
 		fi
-		info "Md5sum ok."
+		info "$PKGMK_HASH_TYPE ok."
 		exit 0
 	fi
 }
@@ -370,8 +378,8 @@ make_work_dir() {
 	remove_work_dir
 	mkdir -p $SRC $PKG
 
-	if [ "$PKGMK_IGNORE_MD5SUM" = "no" ]; then
-		check_md5sum
+	if [ "$PKGMK_IGNORE_HASH" = "no" ]; then
+		check_hash
 	fi
 }
 
@@ -551,9 +559,9 @@ print_help() {
 	echo "  -uf,  --update-footprint    update footprint using result from last build"
 	echo "  -if,  --ignore-footprint    build package without checking footprint"
 	echo "  -in,  --ignore-new          build package, ignore new files in a footprint missmatch"
-	echo "  -um,  --update-md5sum       update md5sum"
-	echo "  -im,  --ignore-md5sum       build package without checking md5sum"
-	echo "  -cm,  --check-md5sum        do not build, only check md5sum"
+	echo "  -uh,  --update-hash         update hash"
+	echo "  -ih,  --ignore-hash         build package without checking hash"
+	echo "  -ch,  --check-hash          do not build, only check hash"
 	echo "  -ns,  --no-strip            do not strip executable binaries or libraries"
 	echo "  -f,   --force               build package even if it appears to be up to date"
 	echo "  -c,   --clean               remove package and downloaded files"
@@ -587,12 +595,12 @@ parse_options() {
 				PKGMK_IGNORE_FOOTPRINT="yes" ;;
 			-in|--ignore-new)
 				PKGMK_IGNORE_NEW="yes" ;;
-			-um|--update-md5sum)
-				PKGMK_UPDATE_MD5SUM="yes" ;;
-			-im|--ignore-md5sum)
-				PKGMK_IGNORE_MD5SUM="yes" ;;
-			-cm|--check-md5sum)
-				PKGMK_CHECK_MD5SUM="yes" ;;
+			-uh|--update-hash)
+				PKGMK_UPDATE_HASH="yes" ;;
+			-ih|--ignore-hash)
+				PKGMK_IGNORE_HASH="yes" ;;
+			-ch|--check-hash)
+				PKGMK_CHECK_HASH="yes" ;;
 			-ns|--no-strip)
 				PKGMK_NO_STRIP="yes" ;;
 			-f|--force)
@@ -672,11 +680,11 @@ main() {
 		exit 0
 	fi
 	
-	if [ "$PKGMK_UPDATE_MD5SUM" = "yes" ]; then
+	if [ "$PKGMK_UPDATE_HASH" = "yes" ]; then
 		download_source
-		check_file "$PKGMK_MD5SUM"
-		make_md5sum > $PKGMK_MD5SUM
-		info "Md5sum updated."
+		check_file "$PKGMK_HASH"
+		make_hash > $PKGMK_HASH
+		info "$PKGMK_HASH_TYPE updated."
 		exit 0
 	fi
 	
@@ -702,7 +710,7 @@ main() {
 		exit 0
 	fi
 	
-	if [ "`build_needed`" = "no" ] && [ "$PKGMK_FORCE" = "no" ] && [ "$PKGMK_CHECK_MD5SUM" = "no" ]; then
+	if [ "`build_needed`" = "no" ] && [ "$PKGMK_FORCE" = "no" ] && [ "$PKGMK_CHECK_HASH" = "no" ]; then
 		info "Package '$TARGET' is up to date."
 	else
 		download_source
@@ -712,7 +720,7 @@ main() {
 	if [ "$PKGMK_INSTALL" != "no" ]; then
 		install_package
 	fi
-	
+
 	exit 0
 }
 
@@ -728,6 +736,7 @@ PKGMK_CONFFILE="/etc/pkgmk.conf"
 PKGMK_PKGFILE="Pkgfile"
 PKGMK_FOOTPRINT=".footprint"
 PKGMK_MD5SUM=".md5sum"
+PKGMK_SHA256SUM=".sha256sum"
 PKGMK_NOSTRIP=".nostrip"
 
 PKGMK_SOURCE_MIRRORS=()
@@ -748,9 +757,9 @@ PKGMK_IGNORE_FOOTPRINT="no"
 PKGMK_IGNORE_NEW="no"
 PKGMK_FORCE="no"
 PKGMK_KEEP_WORK="no"
-PKGMK_UPDATE_MD5SUM="no"
-PKGMK_IGNORE_MD5SUM="no"
-PKGMK_CHECK_MD5SUM="no"
+PKGMK_UPDATE_HASH="no"
+PKGMK_IGNORE_HASH="no"
+PKGMK_CHECK_HASH="no"
 PKGMK_NO_STRIP="no"
 PKGMK_CLEAN="no"
 
