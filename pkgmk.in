@@ -225,22 +225,11 @@ make_footprint() {
 }
 
 check_md5sum() {
-	local FILE="$PKGMK_WORK_DIR/.tmp"
-
 	cd $PKGMK_ROOT
 	
 	if [ -f $PKGMK_MD5SUM ]; then
-		make_md5sum > $FILE.md5sum
-		sort -k 2 $PKGMK_MD5SUM > $FILE.md5sum.orig
-		diff -w -t -U 0 $FILE.md5sum.orig $FILE.md5sum | \
-			sed '/^@@/d' | \
-			sed '/^+++/d' | \
-			sed '/^---/d' | \
-			sed 's/^+/NEW       /g' | \
-			sed 's/^-/MISSING   /g' > $FILE.md5sum.diff
-		if [ -s $FILE.md5sum.diff ]; then
-			error "Md5sum mismatch found:"
-			cat $FILE.md5sum.diff >&2
+        md5sum --check $PKGMK_MD5SUM
+        if [ "$?" = 1 ]; then
 
 			if [ "$PKGMK_KEEP_WORK" = "no" ]; then
 				rm -rf $PKGMK_WORK_DIR
